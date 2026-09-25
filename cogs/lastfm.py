@@ -25,6 +25,12 @@ from services.lastfm_api import (
 )
 
 
+# --------------------------------------------------
+# Visual configuration
+# --------------------------------------------------
+
+LASTFM_RED = discord.Colour.from_rgb(213, 16, 7)
+
 PERIODS = {
     "7day": "7 days",
     "1month": "1 month",
@@ -34,44 +40,91 @@ PERIODS = {
     "overall": "All time",
 }
 
-
 PERIOD_CHOICES = [
-    app_commands.Choice(
-        name="7 days",
-        value="7day",
-    ),
-    app_commands.Choice(
-        name="1 month",
-        value="1month",
-    ),
-    app_commands.Choice(
-        name="3 months",
-        value="3month",
-    ),
-    app_commands.Choice(
-        name="6 months",
-        value="6month",
-    ),
-    app_commands.Choice(
-        name="1 year",
-        value="12month",
-    ),
-    app_commands.Choice(
-        name="All time",
-        value="overall",
-    ),
+    app_commands.Choice(name="7 days", value="7day"),
+    app_commands.Choice(name="1 month", value="1month"),
+    app_commands.Choice(name="3 months", value="3month"),
+    app_commands.Choice(name="6 months", value="6month"),
+    app_commands.Choice(name="1 year", value="12month"),
+    app_commands.Choice(name="All time", value="overall"),
 ]
 
 
-class LastFM(
-    commands.GroupCog,
-    group_name="fm",
+def number(value) -> str:
+    """Format numbers like 51036 -> 51,036."""
+    try:
+        return f"{int(value):,}"
+    except (TypeError, ValueError):
+        return "0"
+
+
+def get_image(data: dict) -> str | None:
+    """Get the largest Last.fm image from an API object."""
+    images = data.get("image", [])
+
+    for image in reversed(images):
+        url = image.get("#text")
+
+        if url:
+            return url
+
+    return None
+
+
+def base_embed(
+    *,
+    title: str,
+    description: str | None = None,
+    url: str | None = None,
+) -> discord.Embed:
+    """Create a consistent Kallie's Music Tracker embed."""
+    return discord.Embed(
+        title=title,
+        description=description,
+        url=url,
+        colour=LASTFM_RED,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+
+def finish_embed(
+    embed: discord.Embed,
+    text: str | None = None,
 ):
-    def __init__(
-        self,
-        bot: commands.Bot,
-    ):
+    footer = "Kallie's Music Tracker"
+
+    if text:
+        footer = f"{text} • {footer}"
+
+    embed.set_footer(text=footer)
+
+    return embed
+
+
+def medal(index: int) -> str:
+    return {
+        1: "🥇",
+        2: "🥈",
+        3: "🥉",
+    }.get(index, f"`{index}.`")
+
+
+@app_commands.allowed_installs(
+    guilds=True,
+    users=True,
+)
+@app_commands.allowed_contexts(
+    guilds=True,
+    dms=True,
+    private_channels=True,
+)
+class LastFM(commands.GroupCog, group_name="fm"):
+    def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    # --------------------------------------------------
+    # Shared account helpers
+    # --------------------------------------------------
 
     async def resolve_username(
         self,
@@ -97,8 +150,8 @@ class LastFM(
 
         if username is None:
             await interaction.followup.send(
-                "❌ You haven't linked a Last.fm "
-                "account yet. Use `/fm set` first.",
+                "❌ You haven't linked a Last.fm account yet. "
+                "Use `/fm set` first.",
                 ephemeral=True,
             )
 
@@ -106,13 +159,13 @@ class LastFM(
 
         return username
 
+    # ==================================================
     # /fm set
+    # ==================================================
 
     @app_commands.command(
         name="set",
-        description=(
-            "Link your Discord account to Last.fm."
-        ),
+        description="Link your Discord account to Last.fm.",
     )
     @app_commands.describe(
         username="Your Last.fm username",
@@ -127,9 +180,7 @@ class LastFM(
         )
 
         try:
-            user = await get_user_info(
-                username
-            )
+            user = await get_user_info(username)
 
         except LastFMError as error:
             await interaction.followup.send(
@@ -146,21 +197,17 @@ class LastFM(
         )
 
         await interaction.followup.send(
-            (
-                "✅ Your Last.fm account is now "
-                f"linked to **{username}**."
-            ),
+            f"✅ Linked your Discord account to **{username}**.",
             ephemeral=True,
         )
 
+    # ==================================================
     # /fm now
+    # ==================================================
 
     @app_commands.command(
         name="now",
-        description=(
-            "Show what you or another Last.fm "
-            "user is listening to."
-        ),
+        description="Show what you or another Last.fm user is listening to.",
     )
     @app_commands.describe(
         username="Optional Last.fm username",
@@ -181,13 +228,8 @@ class LastFM(
             return
 
         try:
-            track = await get_recent_track(
-                username
-            )
-
-            user = await get_user_info(
-                username
-            )
+            track = await get_recent_track(username)
+            user = await get_user_info(username)
 
         except LastFMError as error:
             await interaction.followup.send(
@@ -198,55 +240,28 @@ class LastFM(
 
         if track is None:
             await interaction.followup.send(
-                (
-                    "❌ No recent tracks found for "
-                    f"`{username}`."
-                )
+                f"❌ No recent tracks found for `{username}`."
             )
             return
 
-        title = track["name"]
+        title = track.get(
+            "name",
+            "Unknown track",
+        )
 
         artist = (
-            track.get(
-                "artist",
-                {},
-            ).get("name")
+            track.get("artist", {}).get("name")
             or "Unknown artist"
         )
 
         album = (
-            track.get(
-                "album",
-                {},
-            ).get("#text")
+            track.get("album", {}).get("#text")
             or "Unknown album"
         )
 
         now_playing = (
-            track.get(
-                "@attr",
-                {},
-            ).get("nowplaying")
+            track.get("@attr", {}).get("nowplaying")
             == "true"
-        )
-
-        images = track.get(
-            "image",
-            [],
-        )
-
-        artwork = (
-            images[-1].get("#text")
-            if images
-            else None
-        )
-
-        scrobbles = int(
-            user.get(
-                "playcount",
-                0,
-            )
         )
 
         canonical_username = user.get(
@@ -254,51 +269,71 @@ class LastFM(
             username,
         )
 
-        embed = discord.Embed(
+        artist_plays = None
+
+        try:
+            _, artist_plays = await get_artist_playcount(
+                artist,
+                canonical_username,
+            )
+
+        except LastFMError:
+            pass
+
+        status = (
+            "🎧 NOW PLAYING"
+            if now_playing
+            else "🎵 LAST PLAYED"
+        )
+
+        embed = base_embed(
             title=title,
             description=(
-                f"**{artist}**\n{album}"
+                f"### {artist}\n"
+                f"*{album}*"
             ),
             url=track.get("url"),
         )
 
         embed.set_author(
-            name=(
-                f"{canonical_username} — "
-                f"{'Now Playing' if now_playing else 'Last Played'}"
-            )
+            name=f"{status}  •  {canonical_username}",
+            icon_url=interaction.user.display_avatar.url,
         )
+
+        if artist_plays is not None:
+            embed.add_field(
+                name="Artist plays",
+                value=f"**{number(artist_plays)}**",
+                inline=True,
+            )
 
         embed.add_field(
             name="Total scrobbles",
-            value=f"{scrobbles:,}",
+            value=f"**{number(user.get('playcount'))}**",
             inline=True,
         )
 
-        if artwork:
-            embed.set_thumbnail(
-                url=artwork
-            )
+        artwork = get_image(track)
 
-        embed.set_footer(
-            text=(
-                "Kallie's Music Tracker • "
-                "Last.fm"
-            )
+        if artwork:
+            embed.set_thumbnail(url=artwork)
+
+        finish_embed(
+            embed,
+            "Last.fm",
         )
 
         await interaction.followup.send(
             embed=embed
         )
 
+    # ==================================================
     # /fm stats
+    # ==================================================
 
     @app_commands.command(
         name="stats",
-        description=(
-            "Show a Last.fm user's profile "
-            "statistics."
-        ),
+        description="Show a Last.fm user's profile statistics.",
     )
     @app_commands.describe(
         username="Optional Last.fm username",
@@ -319,13 +354,8 @@ class LastFM(
             return
 
         try:
-            user = await get_user_info(
-                username
-            )
-
-            track = await get_recent_track(
-                username
-            )
+            user = await get_user_info(username)
+            track = await get_recent_track(username)
 
         except LastFMError as error:
             await interaction.followup.send(
@@ -339,102 +369,62 @@ class LastFM(
             username,
         )
 
-        scrobbles = int(
-            user.get(
-                "playcount",
-                0,
-            )
+        embed = base_embed(
+            title=f"📊 {canonical_username}'s Last.fm",
+            url=user.get("url"),
         )
 
-        artist_count = int(
-            user.get(
-                "artist_count",
-                0,
-            )
+        embed.set_author(
+            name="LISTENING PROFILE",
+            icon_url=interaction.user.display_avatar.url,
         )
 
-        album_count = int(
-            user.get(
-                "album_count",
-                0,
-            )
+        embed.add_field(
+            name="🎵 Scrobbles",
+            value=f"**{number(user.get('playcount'))}**",
+            inline=True,
         )
 
-        track_count = int(
-            user.get(
-                "track_count",
-                0,
-            )
+        embed.add_field(
+            name="🎤 Artists",
+            value=f"**{number(user.get('artist_count'))}**",
+            inline=True,
+        )
+
+        embed.add_field(
+            name="💿 Albums",
+            value=f"**{number(user.get('album_count'))}**",
+            inline=True,
+        )
+
+        embed.add_field(
+            name="🎶 Tracks",
+            value=f"**{number(user.get('track_count'))}**",
+            inline=True,
         )
 
         registered = user.get(
             "registered",
             {},
-        )
+        ).get("unixtime")
 
-        registered_timestamp = (
-            registered.get("unixtime")
-        )
-
-        if registered_timestamp:
-            registered_date = (
-                datetime.fromtimestamp(
-                    int(
-                        registered_timestamp
-                    ),
-                    tz=timezone.utc,
-                ).strftime(
-                    "%d %B %Y"
-                )
-            )
-
+        if registered:
+            registered_date = datetime.fromtimestamp(
+                int(registered),
+                tz=timezone.utc,
+            ).strftime("%d %b %Y")
         else:
             registered_date = "Unknown"
 
-        embed = discord.Embed(
-            title=(
-                f"📊 {canonical_username}'s "
-                "Last.fm"
-            ),
-            url=user.get("url"),
-        )
-
         embed.add_field(
-            name="Scrobbles",
-            value=f"{scrobbles:,}",
-            inline=True,
-        )
-
-        embed.add_field(
-            name="Artists",
-            value=f"{artist_count:,}",
-            inline=True,
-        )
-
-        embed.add_field(
-            name="Albums",
-            value=f"{album_count:,}",
-            inline=True,
-        )
-
-        embed.add_field(
-            name="Tracks",
-            value=f"{track_count:,}",
-            inline=True,
-        )
-
-        embed.add_field(
-            name="Registered",
-            value=registered_date,
+            name="📅 Scrobbling since",
+            value=f"**{registered_date}**",
             inline=True,
         )
 
         if track:
             artist = (
-                track.get(
-                    "artist",
-                    {},
-                ).get("name")
+                track.get("artist", {}).get("name")
                 or "Unknown artist"
             )
 
@@ -443,63 +433,44 @@ class LastFM(
                 "Unknown track",
             )
 
-            now_playing = (
-                track.get(
-                    "@attr",
-                    {},
-                ).get("nowplaying")
+            playing = (
+                track.get("@attr", {}).get("nowplaying")
                 == "true"
             )
 
-            status = (
-                "🎧 Now Playing"
-                if now_playing
-                else "🎵 Last Played"
-            )
-
             embed.add_field(
-                name=status,
-                value=(
-                    f"**{artist}** — "
-                    f"{title}"
+                name=(
+                    "🎧 Now Playing"
+                    if playing
+                    else "🎵 Last Played"
                 ),
+                value=f"**{artist}**\n{title}",
                 inline=False,
             )
 
-        images = user.get(
-            "image",
-            [],
-        )
+        profile_image = get_image(user)
 
-        if images:
-            profile_image = (
-                images[-1].get("#text")
+        if profile_image:
+            embed.set_thumbnail(
+                url=profile_image
             )
 
-            if profile_image:
-                embed.set_thumbnail(
-                    url=profile_image
-                )
-
-        embed.set_footer(
-            text=(
-                "Kallie's Music Tracker • "
-                "Last.fm"
-            )
+        finish_embed(
+            embed,
+            "Profile statistics",
         )
 
         await interaction.followup.send(
             embed=embed
         )
 
+    # ==================================================
     # /fm recent
+    # ==================================================
 
     @app_commands.command(
         name="recent",
-        description=(
-            "Show a Last.fm user's 10 most "
-            "recent tracks."
-        ),
+        description="Show a Last.fm user's 10 most recent tracks.",
     )
     @app_commands.describe(
         username="Optional Last.fm username",
@@ -525,9 +496,7 @@ class LastFM(
                 limit=10,
             )
 
-            user = await get_user_info(
-                username
-            )
+            user = await get_user_info(username)
 
         except LastFMError as error:
             await interaction.followup.send(
@@ -538,10 +507,7 @@ class LastFM(
 
         if not tracks:
             await interaction.followup.send(
-                (
-                    "❌ No recent tracks found for "
-                    f"`{username}`."
-                )
+                f"❌ No recent tracks found for `{username}`."
             )
             return
 
@@ -557,10 +523,7 @@ class LastFM(
             start=1,
         ):
             artist = (
-                track.get(
-                    "artist",
-                    {},
-                ).get("name")
+                track.get("artist", {}).get("name")
                 or "Unknown artist"
             )
 
@@ -569,72 +532,48 @@ class LastFM(
                 "Unknown track",
             )
 
-            now_playing = (
-                track.get(
-                    "@attr",
-                    {},
-                ).get("nowplaying")
+            playing = (
+                track.get("@attr", {}).get("nowplaying")
                 == "true"
             )
 
-            marker = (
-                " 🎧"
-                if now_playing
-                else ""
-            )
+            marker = " `NOW`" if playing else ""
 
             lines.append(
-                (
-                    f"`{index:>2}.` "
-                    f"**{artist}** — "
-                    f"{title}{marker}"
-                )
+                f"**{index}. {artist}** — {title}{marker}"
             )
 
-        embed = discord.Embed(
-            title=(
-                f"🕒 {canonical_username}'s "
-                "Recent Tracks"
-            ),
-            description="\n".join(
-                lines
-            ),
+        embed = base_embed(
+            title=f"🕒 {canonical_username}'s Recent Tracks",
+            description="\n".join(lines),
             url=user.get("url"),
         )
 
-        images = tracks[0].get(
-            "image",
-            [],
+        artwork = get_image(
+            tracks[0]
         )
 
-        if images:
-            artwork = (
-                images[-1].get("#text")
+        if artwork:
+            embed.set_thumbnail(
+                url=artwork
             )
 
-            if artwork:
-                embed.set_thumbnail(
-                    url=artwork
-                )
-
-        embed.set_footer(
-            text=(
-                "🎧 = currently playing • "
-                "Kallie's Music Tracker"
-            )
+        finish_embed(
+            embed,
+            "10 most recent scrobbles",
         )
 
         await interaction.followup.send(
             embed=embed
         )
 
+    # ==================================================
     # /fm topartists
+    # ==================================================
 
     @app_commands.command(
         name="topartists",
-        description=(
-            "Show a Last.fm user's top artists."
-        ),
+        description="Show a Last.fm user's top artists.",
     )
     @app_commands.describe(
         period="Time period",
@@ -646,10 +585,7 @@ class LastFM(
     async def topartists(
         self,
         interaction: discord.Interaction,
-        period: (
-            app_commands.Choice[str]
-            | None
-        ) = None,
+        period: app_commands.Choice[str] | None = None,
         username: str | None = None,
     ):
         await interaction.response.defer()
@@ -675,9 +611,7 @@ class LastFM(
                 limit=10,
             )
 
-            user = await get_user_info(
-                username
-            )
+            user = await get_user_info(username)
 
         except LastFMError as error:
             await interaction.followup.send(
@@ -697,63 +631,34 @@ class LastFM(
             artists,
             start=1,
         ):
-            name = artist.get(
-                "name",
-                "Unknown artist",
-            )
-
-            plays = int(
-                artist.get(
-                    "playcount",
-                    0,
-                )
-            )
-
-            medal = {
-                1: "🥇",
-                2: "🥈",
-                3: "🥉",
-            }.get(
-                index,
-                f"`{index}.`",
-            )
-
             lines.append(
-                (
-                    f"{medal} **{name}** — "
-                    f"{plays:,} plays"
-                )
+                f"{medal(index)} "
+                f"**{artist.get('name', 'Unknown artist')}**\n"
+                f"　{number(artist.get('playcount'))} plays"
             )
 
-        embed = discord.Embed(
-            title=(
-                f"🎤 {canonical_username}'s "
-                "Top Artists"
-            ),
-            description="\n".join(
-                lines
-            ),
+        embed = base_embed(
+            title=f"🎤 {canonical_username}'s Top Artists",
+            description="\n".join(lines),
             url=user.get("url"),
         )
 
-        embed.set_footer(
-            text=(
-                f"{PERIODS[period_value]} • "
-                "Kallie's Music Tracker"
-            )
+        finish_embed(
+            embed,
+            PERIODS[period_value],
         )
 
         await interaction.followup.send(
             embed=embed
         )
 
+    # ==================================================
     # /fm topalbums
+    # ==================================================
 
     @app_commands.command(
         name="topalbums",
-        description=(
-            "Show a Last.fm user's top albums."
-        ),
+        description="Show a Last.fm user's top albums.",
     )
     @app_commands.describe(
         period="Time period",
@@ -765,10 +670,7 @@ class LastFM(
     async def topalbums(
         self,
         interaction: discord.Interaction,
-        period: (
-            app_commands.Choice[str]
-            | None
-        ) = None,
+        period: app_commands.Choice[str] | None = None,
         username: str | None = None,
     ):
         await interaction.response.defer()
@@ -794,9 +696,7 @@ class LastFM(
                 limit=10,
             )
 
-            user = await get_user_info(
-                username
-            )
+            user = await get_user_info(username)
 
         except LastFMError as error:
             await interaction.followup.send(
@@ -816,90 +716,50 @@ class LastFM(
             albums,
             start=1,
         ):
-            name = album.get(
-                "name",
-                "Unknown album",
-            )
-
             artist = (
-                album.get(
-                    "artist",
-                    {},
-                ).get("name")
+                album.get("artist", {}).get("name")
                 or "Unknown artist"
             )
 
-            plays = int(
-                album.get(
-                    "playcount",
-                    0,
-                )
-            )
-
-            medal = {
-                1: "🥇",
-                2: "🥈",
-                3: "🥉",
-            }.get(
-                index,
-                f"`{index}.`",
-            )
-
             lines.append(
-                (
-                    f"{medal} **{name}** — "
-                    f"{artist} "
-                    f"({plays:,} plays)"
-                )
+                f"{medal(index)} "
+                f"**{album.get('name', 'Unknown album')}**\n"
+                f"　{artist} • "
+                f"{number(album.get('playcount'))} plays"
             )
 
-        embed = discord.Embed(
-            title=(
-                f"💿 {canonical_username}'s "
-                "Top Albums"
-            ),
-            description="\n".join(
-                lines
-            ),
+        embed = base_embed(
+            title=f"💿 {canonical_username}'s Top Albums",
+            description="\n".join(lines),
             url=user.get("url"),
         )
 
         if albums:
-            images = albums[0].get(
-                "image",
-                [],
+            artwork = get_image(
+                albums[0]
             )
 
-            if images:
-                artwork = (
-                    images[-1].get(
-                        "#text"
-                    )
+            if artwork:
+                embed.set_thumbnail(
+                    url=artwork
                 )
 
-                if artwork:
-                    embed.set_thumbnail(
-                        url=artwork
-                    )
-
-        embed.set_footer(
-            text=(
-                f"{PERIODS[period_value]} • "
-                "Kallie's Music Tracker"
-            )
+        finish_embed(
+            embed,
+            PERIODS[period_value],
         )
 
         await interaction.followup.send(
             embed=embed
         )
 
+    # ==================================================
     # /fm toptracks
+    # ==================================================
 
     @app_commands.command(
         name="toptracks",
-        description=(
-            "Show a Last.fm user's top tracks."
-        ),
+        description="Show a Last.fm user's top tracks.",
     )
     @app_commands.describe(
         period="Time period",
@@ -911,10 +771,7 @@ class LastFM(
     async def toptracks(
         self,
         interaction: discord.Interaction,
-        period: (
-            app_commands.Choice[str]
-            | None
-        ) = None,
+        period: app_commands.Choice[str] | None = None,
         username: str | None = None,
     ):
         await interaction.response.defer()
@@ -940,9 +797,7 @@ class LastFM(
                 limit=10,
             )
 
-            user = await get_user_info(
-                username
-            )
+            user = await get_user_info(username)
 
         except LastFMError as error:
             await interaction.followup.send(
@@ -962,73 +817,40 @@ class LastFM(
             tracks,
             start=1,
         ):
-            title = track.get(
-                "name",
-                "Unknown track",
-            )
-
             artist = (
-                track.get(
-                    "artist",
-                    {},
-                ).get("name")
+                track.get("artist", {}).get("name")
                 or "Unknown artist"
             )
 
-            plays = int(
-                track.get(
-                    "playcount",
-                    0,
-                )
-            )
-
-            medal = {
-                1: "🥇",
-                2: "🥈",
-                3: "🥉",
-            }.get(
-                index,
-                f"`{index}.`",
-            )
-
             lines.append(
-                (
-                    f"{medal} **{title}** — "
-                    f"{artist} "
-                    f"({plays:,} plays)"
-                )
+                f"{medal(index)} "
+                f"**{track.get('name', 'Unknown track')}**\n"
+                f"　{artist} • "
+                f"{number(track.get('playcount'))} plays"
             )
 
-        embed = discord.Embed(
-            title=(
-                f"🎵 {canonical_username}'s "
-                "Top Tracks"
-            ),
-            description="\n".join(
-                lines
-            ),
+        embed = base_embed(
+            title=f"🎵 {canonical_username}'s Top Tracks",
+            description="\n".join(lines),
             url=user.get("url"),
         )
 
-        embed.set_footer(
-            text=(
-                f"{PERIODS[period_value]} • "
-                "Kallie's Music Tracker"
-            )
+        finish_embed(
+            embed,
+            PERIODS[period_value],
         )
 
         await interaction.followup.send(
             embed=embed
         )
 
+    # ==================================================
     # /fm whoknows
+    # ==================================================
 
     @app_commands.command(
         name="whoknows",
-        description=(
-            "See who in the server listens "
-            "to an artist the most."
-        ),
+        description="See who in the server listens to an artist the most.",
     )
     @app_commands.describe(
         artist="Artist to check",
@@ -1044,25 +866,17 @@ class LastFM(
 
         if guild is None:
             await interaction.followup.send(
-                (
-                    "❌ WhoKnows can only be "
-                    "used inside a server."
-                ),
+                "❌ WhoKnows can only be used inside a server.",
                 ephemeral=True,
             )
             return
 
-        linked_users = (
-            await get_all_lastfm_users()
-        )
+        linked_users = await get_all_lastfm_users()
 
         results = []
         canonical_artist = artist
 
-        for (
-            discord_id,
-            lastfm_username,
-        ) in linked_users:
+        for discord_id, lastfm_username in linked_users:
             member = guild.get_member(
                 discord_id
             )
@@ -1087,46 +901,25 @@ class LastFM(
             results.append(
                 {
                     "member": member,
-                    "username": (
-                        lastfm_username
-                    ),
+                    "username": lastfm_username,
                     "plays": playcount,
                 }
             )
 
-        if not results:
-            await interaction.followup.send(
-                (
-                    "❌ Nobody in this server "
-                    "has a linked Last.fm "
-                    "account that could be "
-                    "checked."
-                )
-            )
-            return
-
         results.sort(
-            key=lambda result: (
-                result["plays"]
-            ),
+            key=lambda item: item["plays"],
             reverse=True,
         )
 
         listeners = [
-            result
-            for result in results
-            if result["plays"] > 0
+            item
+            for item in results
+            if item["plays"] > 0
         ]
 
         if not listeners:
             await interaction.followup.send(
-                (
-                    "Nobody with a linked "
-                    "Last.fm account has "
-                    f"scrobbled "
-                    f"**{canonical_artist}** "
-                    "yet."
-                )
+                f"Nobody here has scrobbled **{canonical_artist}** yet."
             )
             return
 
@@ -1138,66 +931,43 @@ class LastFM(
             .casefold()
         )
 
-        previous_crown = (
-            await get_artist_crown(
-                guild.id,
-                artist_key,
-            )
+        previous_crown = await get_artist_crown(
+            guild.id,
+            artist_key,
         )
 
-        crown_stolen = False
+        crown_stolen = (
+            previous_crown is not None
+            and previous_crown["discord_id"]
+            != winner["member"].id
+        )
+
         previous_owner = None
 
-        if previous_crown is not None:
-            previous_owner_id = (
-                previous_crown[
-                    "discord_id"
-                ]
+        if crown_stolen:
+            previous_owner = guild.get_member(
+                previous_crown["discord_id"]
             )
-
-            if (
-                previous_owner_id
-                != winner["member"].id
-            ):
-                crown_stolen = True
-
-                previous_owner = (
-                    guild.get_member(
-                        previous_owner_id
-                    )
-                )
 
         await set_artist_crown(
             guild_id=guild.id,
             artist_key=artist_key,
             artist_name=canonical_artist,
-            discord_id=(
-                winner["member"].id
-            ),
+            discord_id=winner["member"].id,
             playcount=winner["plays"],
         )
 
         lines = []
 
-        for index, result in enumerate(
+        combined_plays = sum(
+            item["plays"]
+            for item in listeners
+        )
+
+        for index, item in enumerate(
             listeners[:10],
             start=1,
         ):
-            member = result["member"]
-            plays = result["plays"]
-
-            if index == 1:
-                rank = "🥇"
-
-            elif index == 2:
-                rank = "🥈"
-
-            elif index == 3:
-                rank = "🥉"
-
-            else:
-                rank = f"`{index}.`"
-
             crown = (
                 " 👑"
                 if index == 1
@@ -1205,90 +975,71 @@ class LastFM(
             )
 
             lines.append(
-                (
-                    f"{rank} "
-                    f"{member.mention} — "
-                    f"**{plays:,}** plays"
-                    f"{crown}"
-                )
+                f"{medal(index)} "
+                f"**{item['member'].display_name}**{crown}\n"
+                f"　{number(item['plays'])} plays"
             )
 
-        embed = discord.Embed(
-            title=(
-                f"👑 Who Knows "
-                f"{canonical_artist}?"
-            ),
-            description="\n".join(
-                lines
-            ),
+        embed = base_embed(
+            title=f"👑 Who Knows — {canonical_artist}",
+            description="\n".join(lines),
+        )
+
+        embed.set_thumbnail(
+            url=winner["member"].display_avatar.url
         )
 
         if crown_stolen:
             if previous_owner:
-                steal_text = (
-                    f"{winner['member'].mention} "
-                    f"stole the "
-                    f"**{canonical_artist}** "
-                    "crown from "
-                    f"{previous_owner.mention}!"
-                )
-
+                old_owner = previous_owner.mention
             else:
-                steal_text = (
-                    f"{winner['member'].mention} "
-                    f"claimed the "
-                    f"**{canonical_artist}** "
-                    "crown from its previous "
-                    "owner!"
-                )
+                old_owner = "the previous owner"
 
             embed.add_field(
                 name="🚨 CROWN STOLEN",
-                value=steal_text,
+                value=(
+                    f"{winner['member'].mention} stole the "
+                    f"**{canonical_artist}** crown from "
+                    f"{old_owner}!"
+                ),
                 inline=False,
             )
 
         else:
             embed.add_field(
-                name="Crown",
-                value=(
-                    f"{winner['member'].mention} "
-                    f"owns the "
-                    f"**{canonical_artist}** "
-                    "crown with "
-                    f"**{winner['plays']:,}** "
-                    "plays."
-                ),
-                inline=False,
+                name="👑 Crown holder",
+                value=winner["member"].mention,
+                inline=True,
             )
 
-        embed.set_footer(
-            text=(
-                f"{len(listeners)} listener"
-                f"{'' if len(listeners) == 1 else 's'} "
-                "ranked • "
-                "Kallie's Music Tracker"
+            embed.add_field(
+                name="Crown score",
+                value=f"**{number(winner['plays'])}** plays",
+                inline=True,
             )
+
+        finish_embed(
+            embed,
+            (
+                f"{len(listeners)} listeners • "
+                f"{number(combined_plays)} combined plays"
+            ),
         )
 
         await interaction.followup.send(
             embed=embed
         )
 
+    # ==================================================
     # /fm crowns
+    # ==================================================
 
     @app_commands.command(
         name="crowns",
-        description=(
-            "Show the artist crowns owned "
-            "by a server member."
-        ),
+        description="Show the artist crowns owned by a server member.",
     )
     @app_commands.describe(
-        member=(
-            "Member to check. Defaults "
-            "to yourself."
-        ),
+        member="Member to check. Defaults to yourself.",
     )
     async def crowns(
         self,
@@ -1301,18 +1052,12 @@ class LastFM(
 
         if guild is None:
             await interaction.followup.send(
-                (
-                    "❌ Crowns can only be "
-                    "viewed inside a server."
-                ),
+                "❌ Crowns can only be viewed inside a server.",
                 ephemeral=True,
             )
             return
 
-        target = (
-            member
-            or interaction.user
-        )
+        target = member or interaction.user
 
         crowns = await get_user_crowns(
             guild.id,
@@ -1321,11 +1066,7 @@ class LastFM(
 
         if not crowns:
             await interaction.followup.send(
-                (
-                    f"👑 {target.mention} "
-                    "doesn't own any artist "
-                    "crowns yet."
-                )
+                f"👑 {target.mention} doesn't own any artist crowns yet."
             )
             return
 
@@ -1339,33 +1080,30 @@ class LastFM(
             start=1,
         ):
             lines.append(
-                (
-                    f"`{index}.` "
-                    f"**{artist_name}** — "
-                    f"{playcount:,} plays"
-                )
+                f"**{index}. {artist_name}**\n"
+                f"　👑 {number(playcount)} plays"
             )
 
-        embed = discord.Embed(
-            title=(
-                f"👑 {target.display_name}'s "
-                "Crowns"
-            ),
-            description="\n".join(
-                lines
-            ),
+        embed = base_embed(
+            title=f"👑 {target.display_name}'s Crown Cabinet",
+            description="\n".join(lines),
+        )
+
+        embed.set_author(
+            name="ARTIST CROWNS",
+            icon_url=target.display_avatar.url,
         )
 
         embed.set_thumbnail(
             url=target.display_avatar.url
         )
 
-        embed.set_footer(
-            text=(
+        finish_embed(
+            embed,
+            (
                 f"{len(crowns)} crown"
-                f"{'' if len(crowns) == 1 else 's'} • "
-                "Kallie's Music Tracker"
-            )
+                f"{'' if len(crowns) == 1 else 's'}"
+            ),
         )
 
         await interaction.followup.send(
@@ -1373,9 +1111,7 @@ class LastFM(
         )
 
 
-async def setup(
-    bot: commands.Bot,
-):
+async def setup(bot: commands.Bot):
     await bot.add_cog(
         LastFM(bot)
     )
